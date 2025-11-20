@@ -19,6 +19,10 @@ async def domain_account_load(request: Request):
         "db": resp_db.json(),
         "fdr": resp_fdr.json()
     }
+# domain-ms-account-load/main.py
+def new_feature():
+    pass
+
 
 @app.get("/health")
 async def health():
