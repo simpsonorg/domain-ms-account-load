@@ -1,0 +1,82 @@
+name: Cross-Repo Impact Analysis
+
+on:
+  pull_request:
+    branches: [ main, master ]
+
+jobs:
+  analyze:
+    name: Impact Analysis via impact-ai-engine
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+      pull-requests: write
+
+    steps:
+      # 1. Checkout the repo where the PR is opened
+      - name: Checkout current repo
+        uses: actions/checkout@v4
+
+      # 2. Checkout the impact-ai-engine repo
+      - name: Checkout impact-ai-engine
+        uses: actions/checkout@v4
+        with:
+          repository: simpsonorg/impact-ai-engine
+          path: impact-ai-engine
+
+      # 3. Clone ALL microservice repos (source of truth for graph)
+      - name: Clone all microservice repos
+        run: |
+          git clone https://github.com/simpsonorg/ui-account-load
+          git clone https://github.com/simpsonorg/apigee-mock-gateway
+          git clone https://github.com/simpsonorg/psg-mock-router
+          git clone https://github.com/simpsonorg/domain-ms-account-load
+          git clone https://github.com/simpsonorg/crud-ms-account-load-db
+          git clone https://github.com/simpsonorg/crud-ms-account-load-fdr
+          git clone https://github.com/simpsonorg/fdr-vendor-mock
+
+      # 4. Install Python
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: "3.12"
+
+      # 5. Install impact-ai-engine dependencies
+      - name: Install dependencies
+        run: |
+          pip install -r impact-ai-engine/requirements.txt
+
+      # 6. Determine changed files in THIS PR
+      - name: Get changed files in PR
+        id: changes
+        uses: tj-actions/changed-files@v45
+
+      # 7. Run analyzer from impact-ai-engine
+      - name: Run Impact Analysis
+        id: impact
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          REPOS_BASE_DIR: ${{ github.workspace }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          CHANGED_FILES: ${{ join(steps.changes.outputs.all_changed_files, '\n') }}
+        run: |
+          python impact-ai-engine/run_analysis.py > impact_report.md
+          echo "REPORT<<EOF" >> $GITHUB_OUTPUT
+          cat impact_report.md >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      # 8. Comment on PR with impact analysis
+      - name: Post PR Comment
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const body = `${{ steps.impact.outputs.REPORT }}`;
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.name,
+              issue_number: context.issue.number,
+              body
+            })
