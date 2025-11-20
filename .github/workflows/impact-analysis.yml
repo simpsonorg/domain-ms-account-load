@@ -14,18 +14,18 @@ jobs:
       pull-requests: write
 
     steps:
-      # 1. Checkout the repo where the PR is opened
+      # 1. Checkout the repo where PR was opened
       - name: Checkout current repo
         uses: actions/checkout@v4
 
-      # 2. Checkout the impact-ai-engine repo
+      # 2. Checkout central impact-ai-engine repo
       - name: Checkout impact-ai-engine
         uses: actions/checkout@v4
         with:
           repository: simpsonorg/impact-ai-engine
           path: impact-ai-engine
 
-      # 3. Clone ALL microservice repos (source of truth for graph)
+      # 3. Clone all microservices
       - name: Clone all microservice repos
         run: |
           git clone https://github.com/simpsonorg/ui-account-load
@@ -42,7 +42,7 @@ jobs:
         with:
           python-version: "3.12"
 
-      # 5. Install impact-ai-engine dependencies
+      # 5. Install dependencies
       - name: Install dependencies
         run: |
           pip install -r impact-ai-engine/requirements.txt
@@ -52,7 +52,7 @@ jobs:
         id: changes
         uses: tj-actions/changed-files@v45
 
-      # 7. Run analyzer from impact-ai-engine
+      # 7. Run Impact Analysis engine
       - name: Run Impact Analysis
         id: impact
         env:
@@ -63,36 +63,46 @@ jobs:
           CHANGED_FILES: ${{ join(steps.changes.outputs.all_changed_files, '\n') }}
         run: |
           python impact-ai-engine/run_analysis.py > impact_report.md
+
           echo "REPORT<<EOF" >> $GITHUB_OUTPUT
           cat impact_report.md >> $GITHUB_OUTPUT
           echo "EOF" >> $GITHUB_OUTPUT
 
-      # 8. Comment on PR with impact analysis
-      - name: Comment on PR with impact report
-        uses: actions/github-script@v7
-        with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-          script: |
-            const owner = context.payload.pull_request.base.repo.owner.login;
-            const repo  = context.payload.pull_request.base.repo.name;
-            const pr    = context.payload.pull_request.number;
+      # 8. Install jq (safe JSON escaping)
+      - name: Install jq
+        run: sudo apt-get update && sudo apt-get install -y jq
 
-            let body = `${{ steps.impact.outputs.REPORT }}`.trim();
+      # 9. Post PR Comment — NO JAVASCRIPT ANYWHERE
+      - name: Post PR Comment (curl-safe)
+        env:
+          REPORT: ${{ steps.impact.outputs.REPORT }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          OWNER: ${{ github.event.pull_request.base.repo.owner.login }}
+          REPO: ${{ github.event.pull_request.base.repo.name }}
+        run: |
+          echo "=== REPORT CONTENT ==="
+          echo "$REPORT"
+          echo "======================"
 
-            if (!body) {
-              body = "**Impact Analysis:** No changes detected or analysis produced no output.";
-            }
+          if [ -z "$REPORT" ]; then
+            REPORT="**Impact Analysis:** No output generated."
+          fi
 
-            await github.rest.issues.createComment({
-              owner,
-              repo,
-              issue_number: pr,
-              body
-            });
-            
+          # Escape multiline Markdown safely as JSON
+          JSON_PAYLOAD=$(jq -n --arg body "$REPORT" '{body: $body}')
+
+          echo "Posting comment to: https://api.github.com/repos/$OWNER/$REPO/issues/$PR_NUMBER/comments"
+
+          curl -s -X POST \
+            -H "Authorization: token $GITHUB_TOKEN" \
+            -H "Accept: application/vnd.github.v3+json" \
+            https://api.github.com/repos/$OWNER/$REPO/issues/$PR_NUMBER/comments \
+            -d "$JSON_PAYLOAD"
+
+      # 10. Debug output
       - name: Debug REPORT output
         run: |
           echo "----- REPORT CONTENT START -----"
           echo "${{ steps.impact.outputs.REPORT }}"
           echo "----- REPORT CONTENT END -----"
-
