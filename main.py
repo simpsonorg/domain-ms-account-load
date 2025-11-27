@@ -17,8 +17,7 @@ async def domain_account_load(request: Request):
     return {
         "status": "ok",
         "db": resp_db.json(),
-        "fdr": resp_fdr.json(),
-        "email": payload.get("email")
+        "fdr": resp_fdr.json()
     }
 
 @app.get("/health")
